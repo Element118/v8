@@ -8,6 +8,18 @@
 namespace v8 {
 namespace internal {
 
+bool IsSubtype(MachineRepresentation rep1, MachineRepresentation rep2) {
+  if (rep1 == rep2) return true;
+  switch (rep1) {
+    case MachineRepresentation::kTaggedSigned:
+      return rep2 == MachineRepresentation::kTagged;
+    case MachineRepresentation ::kTaggedPointer:
+      return rep2 == MachineRepresentation ::kTagged;
+    default:
+      return false;
+  }
+}
+
 std::ostream& operator<<(std::ostream& os, MachineRepresentation rep) {
   return os << MachineReprToString(rep);
 }
@@ -32,11 +44,14 @@ const char* MachineReprToString(MachineRepresentation rep) {
       return "kRepFloat64";
     case MachineRepresentation::kSimd128:
       return "kRepSimd128";
+    case MachineRepresentation::kTaggedSigned:
+      return "kRepTaggedSigned";
+    case MachineRepresentation::kTaggedPointer:
+      return "kRepTaggedPointer";
     case MachineRepresentation::kTagged:
       return "kRepTagged";
   }
   UNREACHABLE();
-  return nullptr;
 }
 
 std::ostream& operator<<(std::ostream& os, MachineSemantic type) {
@@ -59,7 +74,6 @@ std::ostream& operator<<(std::ostream& os, MachineSemantic type) {
       return os << "kTypeAny";
   }
   UNREACHABLE();
-  return os;
 }
 
 

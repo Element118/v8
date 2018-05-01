@@ -2,7 +2,8 @@ set noparent
 
 ahaas@chromium.org
 bradnelson@chromium.org
-jpp@chromium.org
-mtrofin@chromium.org
-rossberg@chromium.org
+clemensh@chromium.org
+mstarzinger@chromium.org
 titzer@chromium.org
+
+# COMPONENT: Blink>JavaScript>WebAssembly

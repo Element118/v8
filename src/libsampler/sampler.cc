@@ -4,7 +4,7 @@
 
 #include "src/libsampler/sampler.h"
 
-#if V8_OS_POSIX && !V8_OS_CYGWIN
+#if V8_OS_POSIX && !V8_OS_CYGWIN && !V8_OS_FUCHSIA
 
 #define USE_SIGNALS
 
@@ -13,7 +13,7 @@
 #include <signal.h>
 #include <sys/time.h>
 
-#if !V8_OS_QNX && !V8_OS_NACL && !V8_OS_AIX
+#if !V8_OS_QNX && !V8_OS_AIX
 #include <sys/syscall.h>  // NOLINT
 #endif
 
@@ -21,8 +21,7 @@
 #include <mach/mach.h>
 // OpenBSD doesn't have <ucontext.h>. ucontext_t lives in <signal.h>
 // and is a typedef for struct sigcontext. There is no uc_mcontext.
-#elif(!V8_OS_ANDROID || defined(__BIONIC_HAVE_UCONTEXT_T)) && \
-    !V8_OS_OPENBSD && !V8_OS_NACL
+#elif(!V8_OS_ANDROID || defined(__BIONIC_HAVE_UCONTEXT_T)) && !V8_OS_OPENBSD
 #include <ucontext.h>
 #endif
 
@@ -39,6 +38,28 @@
 #elif V8_OS_WIN || V8_OS_CYGWIN
 
 #include "src/base/win32-headers.h"
+
+#elif V8_OS_FUCHSIA
+
+#include <zircon/process.h>
+#include <zircon/syscalls.h>
+#include <zircon/syscalls/debug.h>
+#include <zircon/types.h>
+
+// TODO(wez): Remove this once the Fuchsia SDK has rolled.
+#if defined(ZX_THREAD_STATE_REGSET0)
+#define ZX_THREAD_STATE_GENERAL_REGS ZX_THREAD_STATE_REGSET0
+zx_status_t zx_thread_read_state(zx_handle_t h, uint32_t k, void* b, size_t l) {
+  uint32_t dummy_out_len = 0;
+  return zx_thread_read_state(h, k, b, static_cast<uint32_t>(l),
+                              &dummy_out_len);
+}
+#if defined(__x86_64__)
+typedef zx_x86_64_general_regs_t zx_thread_state_general_regs_t;
+#else
+typedef zx_arm64_general_regs_t zx_thread_state_general_regs_t;
+#endif
+#endif  // !defined(ZX_THREAD_STATE_GENERAL_REGS)
 
 #endif
 
@@ -194,7 +215,7 @@ void* ThreadKey(pthread_t thread_id) {
 
 // Returns hash value for hash map.
 uint32_t ThreadHash(pthread_t thread_id) {
-#if V8_OS_MACOSX
+#if V8_OS_BSD
   return static_cast<uint32_t>(reinterpret_cast<intptr_t>(thread_id));
 #else
   return static_cast<uint32_t>(thread_id);
@@ -218,7 +239,7 @@ class Sampler::PlatformData {
 
 class SamplerManager {
  public:
-  SamplerManager() : sampler_map_(base::HashMap::PointersMatch) {}
+  SamplerManager() : sampler_map_() {}
 
   void AddSampler(Sampler* sampler) {
     AtomicGuard atomic_guard(&samplers_access_counter_);
@@ -228,7 +249,7 @@ class SamplerManager {
     base::HashMap::Entry* entry =
             sampler_map_.LookupOrInsert(ThreadKey(thread_id),
                                         ThreadHash(thread_id));
-    DCHECK(entry != nullptr);
+    DCHECK_NOT_NULL(entry);
     if (entry->value == nullptr) {
       SamplerList* samplers = new SamplerList();
       samplers->push_back(sampler);
@@ -257,7 +278,7 @@ class SamplerManager {
     void* thread_key = ThreadKey(thread_id);
     uint32_t thread_hash = ThreadHash(thread_id);
     base::HashMap::Entry* entry = sampler_map_.Lookup(thread_key, thread_hash);
-    DCHECK(entry != nullptr);
+    DCHECK_NOT_NULL(entry);
     SamplerList* samplers = reinterpret_cast<SamplerList*>(entry->value);
     for (SamplerListIterator iter = samplers->begin(); iter != samplers->end();
          ++iter) {
@@ -282,7 +303,7 @@ class SamplerManager {
     if (!entry) return;
     SamplerList& samplers = *static_cast<SamplerList*>(entry->value);
 
-    for (int i = 0; i < samplers.size(); ++i) {
+    for (size_t i = 0; i < samplers.size(); ++i) {
       Sampler* sampler = samplers[i];
       Isolate* isolate = sampler->isolate();
       // We require a fully initialized and entered isolate.
@@ -337,6 +358,28 @@ class Sampler::PlatformData {
  private:
   HANDLE profiled_thread_;
 };
+
+#elif V8_OS_FUCHSIA
+
+class Sampler::PlatformData {
+ public:
+  PlatformData() {
+    zx_handle_duplicate(zx_thread_self(), ZX_RIGHT_SAME_RIGHTS,
+                        &profiled_thread_);
+  }
+  ~PlatformData() {
+    if (profiled_thread_ != ZX_HANDLE_INVALID) {
+      zx_handle_close(profiled_thread_);
+      profiled_thread_ = ZX_HANDLE_INVALID;
+    }
+  }
+
+  zx_handle_t profiled_thread() { return profiled_thread_; }
+
+ private:
+  zx_handle_t profiled_thread_ = ZX_HANDLE_INVALID;
+};
+
 #endif  // USE_SIGNALS
 
 
@@ -366,7 +409,6 @@ class SignalHandler {
 
  private:
   static void Install() {
-#if !V8_OS_NACL
     struct sigaction sa;
     sa.sa_sigaction = &HandleProfilerSignal;
     sigemptyset(&sa.sa_mask);
@@ -377,22 +419,18 @@ class SignalHandler {
 #endif
     signal_handler_installed_ =
         (sigaction(SIGPROF, &sa, &old_signal_handler_) == 0);
-#endif  // !V8_OS_NACL
   }
 
   static void Restore() {
-#if !V8_OS_NACL
     if (signal_handler_installed_) {
       sigaction(SIGPROF, &old_signal_handler_, 0);
       signal_handler_installed_ = false;
     }
-#endif
   }
 
-#if !V8_OS_NACL
   static void FillRegisterState(void* context, RegisterState* regs);
   static void HandleProfilerSignal(int signal, siginfo_t* info, void* context);
-#endif
+
   // Protects the process wide state below.
   static base::Mutex* mutex_;
   static int client_count_;
@@ -406,8 +444,6 @@ struct sigaction SignalHandler::old_signal_handler_;
 bool SignalHandler::signal_handler_installed_ = false;
 
 
-// As Native Client does not support signal handling, profiling is disabled.
-#if !V8_OS_NACL
 void SignalHandler::HandleProfilerSignal(int signal, siginfo_t* info,
                                          void* context) {
   USE(info);
@@ -458,11 +494,18 @@ void SignalHandler::FillRegisterState(void* context, RegisterState* state) {
   state->sp = reinterpret_cast<void*>(mcontext.gregs[29]);
   state->fp = reinterpret_cast<void*>(mcontext.gregs[30]);
 #elif V8_HOST_ARCH_PPC
+#if V8_LIBC_GLIBC
   state->pc = reinterpret_cast<void*>(ucontext->uc_mcontext.regs->nip);
   state->sp =
       reinterpret_cast<void*>(ucontext->uc_mcontext.regs->gpr[PT_R1]);
   state->fp =
       reinterpret_cast<void*>(ucontext->uc_mcontext.regs->gpr[PT_R31]);
+#else
+  // Some C libraries, notably Musl, define the regs member as a void pointer
+  state->pc = reinterpret_cast<void*>(ucontext->uc_mcontext.gp_regs[32]);
+  state->sp = reinterpret_cast<void*>(ucontext->uc_mcontext.gp_regs[1]);
+  state->fp = reinterpret_cast<void*>(ucontext->uc_mcontext.gp_regs[31]);
+#endif
 #elif V8_HOST_ARCH_S390
 #if V8_TARGET_ARCH_32_BIT
   // 31-bit target will have bit 0 (MSB) of the PSW set to denote addressing
@@ -552,8 +595,6 @@ void SignalHandler::FillRegisterState(void* context, RegisterState* state) {
 #endif  // V8_OS_AIX
 }
 
-#endif  // !V8_OS_NACL
-
 #endif  // USE_SIGNALS
 
 
@@ -612,7 +653,7 @@ void Sampler::Stop() {
 
 
 void Sampler::IncreaseProfilingDepth() {
-  base::NoBarrier_AtomicIncrement(&profiling_, 1);
+  base::Relaxed_AtomicIncrement(&profiling_, 1);
 #if defined(USE_SIGNALS)
   SignalHandler::IncreaseSamplerCount();
 #endif
@@ -623,7 +664,7 @@ void Sampler::DecreaseProfilingDepth() {
 #if defined(USE_SIGNALS)
   SignalHandler::DecreaseSamplerCount();
 #endif
-  base::NoBarrier_AtomicIncrement(&profiling_, -1);
+  base::Relaxed_AtomicIncrement(&profiling_, -1);
 }
 
 
@@ -666,6 +707,53 @@ void Sampler::DoSample() {
   }
   ResumeThread(profiled_thread);
 }
+
+#elif V8_OS_FUCHSIA
+
+void Sampler::DoSample() {
+  zx_handle_t profiled_thread = platform_data()->profiled_thread();
+  if (profiled_thread == ZX_HANDLE_INVALID) return;
+
+  if (zx_task_suspend(profiled_thread) != ZX_OK) return;
+
+  // Wait for the target thread to become suspended, or to exit.
+  // TODO(wez): There is currently no suspension count for threads, so there
+  // is a risk that some other caller resumes the thread in-between our suspend
+  // and wait calls, causing us to miss the SUSPENDED signal. We apply a 100ms
+  // deadline to protect against hanging the sampler thread in this case.
+  zx_signals_t signals = 0;
+  zx_status_t suspended = zx_object_wait_one(
+      profiled_thread, ZX_THREAD_SUSPENDED | ZX_THREAD_TERMINATED,
+      zx_deadline_after(ZX_MSEC(100)), &signals);
+  if (suspended != ZX_OK || (signals & ZX_THREAD_SUSPENDED) == 0) {
+    zx_task_resume(profiled_thread, 0);
+    return;
+  }
+
+  // Fetch a copy of its "general register" states.
+  zx_thread_state_general_regs_t thread_state = {};
+  if (zx_thread_read_state(profiled_thread, ZX_THREAD_STATE_GENERAL_REGS,
+                           &thread_state, sizeof(thread_state)) == ZX_OK) {
+    v8::RegisterState state;
+#if V8_HOST_ARCH_X64
+    state.pc = reinterpret_cast<void*>(thread_state.rip);
+    state.sp = reinterpret_cast<void*>(thread_state.rsp);
+    state.fp = reinterpret_cast<void*>(thread_state.rbp);
+#elif V8_HOST_ARCH_ARM64
+    state.pc = reinterpret_cast<void*>(thread_state.pc);
+    state.sp = reinterpret_cast<void*>(thread_state.sp);
+    state.fp = reinterpret_cast<void*>(thread_state.r[29]);
+#endif
+    SampleStack(state);
+  }
+
+  zx_task_resume(profiled_thread, 0);
+}
+
+// TODO(wez): Remove this once the Fuchsia SDK has rolled.
+#if defined(ZX_THREAD_STATE_REGSET0)
+#undef ZX_THREAD_STATE_GENERAL_REGS
+#endif
 
 #endif  // USE_SIGNALS
 

@@ -9,7 +9,6 @@ class View {
     this.divElement = d3.select("#" + id);
     this.divNode = this.divElement[0][0];
     this.parentNode = this.divNode.parentNode;
-    this.hide();
   }
 
   isScrollable() {
@@ -19,15 +18,7 @@ class View {
   show(data, rememberedSelection) {
     this.parentNode.appendChild(this.divElement[0][0]);
     this.initializeContent(data, rememberedSelection);
-    this.resizeToParent();
     this.divElement.attr(VISIBILITY, 'visible');
-  }
-
-  resizeToParent() {
-    var view = this;
-    var documentElement = document.documentElement;
-    var y = this.parentNode.clientHeight || documentElement.clientHeight;
-    this.parentNode.style.height = y + 'px';
   }
 
   hide() {

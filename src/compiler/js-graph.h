@@ -5,12 +5,14 @@
 #ifndef V8_COMPILER_JS_GRAPH_H_
 #define V8_COMPILER_JS_GRAPH_H_
 
+#include "src/base/compiler-specific.h"
 #include "src/compiler/common-node-cache.h"
 #include "src/compiler/common-operator.h"
 #include "src/compiler/graph.h"
 #include "src/compiler/js-operator.h"
 #include "src/compiler/machine-operator.h"
 #include "src/compiler/node-properties.h"
+#include "src/globals.h"
 #include "src/isolate.h"
 
 namespace v8 {
@@ -23,7 +25,7 @@ class Typer;
 // Implements a facade on a Graph, enhancing the graph with JS-specific
 // notions, including various builders for operators, canonicalized global
 // constants, and various helper methods.
-class JSGraph : public ZoneObject {
+class V8_EXPORT_PRIVATE JSGraph : public NON_EXPORTED_BASE(ZoneObject) {
  public:
   JSGraph(Isolate* isolate, Graph* graph, CommonOperatorBuilder* common,
           JSOperatorBuilder* javascript, SimplifiedOperatorBuilder* simplified,
@@ -41,10 +43,17 @@ class JSGraph : public ZoneObject {
   // Canonicalized global constants.
   Node* AllocateInNewSpaceStubConstant();
   Node* AllocateInOldSpaceStubConstant();
+  Node* ArrayConstructorStubConstant();
   Node* ToNumberBuiltinConstant();
-  Node* CEntryStubConstant(int result_size);
+  Node* CEntryStubConstant(int result_size,
+                           SaveFPRegsMode save_doubles = kDontSaveFPRegs,
+                           ArgvMode argv_mode = kArgvOnStack,
+                           bool builtin_exit_frame = false);
   Node* EmptyFixedArrayConstant();
-  Node* EmptyLiteralsArrayConstant();
+  Node* EmptyStringConstant();
+  Node* FixedArrayMapConstant();
+  Node* PropertyArrayMapConstant();
+  Node* FixedDoubleArrayMapConstant();
   Node* HeapNumberMapConstant();
   Node* OptimizedOutConstant();
   Node* StaleRegisterConstant();
@@ -56,6 +65,10 @@ class JSGraph : public ZoneObject {
   Node* ZeroConstant();
   Node* OneConstant();
   Node* NaNConstant();
+  Node* MinusOneConstant();
+
+  // Used for padding frames.
+  Node* PaddingConstant() { return TheHoleConstant(); }
 
   // Creates a HeapConstant node, possibly canonicalized, and may access the
   // heap to inspect the object.
@@ -71,6 +84,9 @@ class JSGraph : public ZoneObject {
 
   // Creates a NumberConstant node, usually canonicalized.
   Node* Constant(int32_t value);
+
+  // Creates a NumberConstant node, usually canonicalized.
+  Node* Constant(uint32_t value);
 
   // Creates a Int32Constant node, usually canonicalized.
   Node* Int32Constant(int32_t value);
@@ -97,10 +113,6 @@ class JSGraph : public ZoneObject {
     return machine()->Is32() ? Int32Constant(static_cast<int32_t>(value))
                              : Int64Constant(static_cast<int64_t>(value));
   }
-  template <typename T>
-  Node* PointerConstant(T* value) {
-    return IntPtrConstant(bit_cast<intptr_t>(value));
-  }
 
   Node* RelocatableInt32Constant(int32_t value, RelocInfo::Mode rmode);
   Node* RelocatableInt64Constant(int64_t value, RelocInfo::Mode rmode);
@@ -111,6 +123,13 @@ class JSGraph : public ZoneObject {
 
   // Creates a Float64Constant node, usually canonicalized.
   Node* Float64Constant(double value);
+
+  // Creates a PointerConstant node (asm.js only).
+  Node* PointerConstant(intptr_t value);
+  template <typename T>
+  Node* PointerConstant(T* value) {
+    return PointerConstant(bit_cast<intptr_t>(value));
+  }
 
   // Creates an ExternalConstant node, usually canonicalized.
   Node* ExternalConstant(ExternalReference ref);
@@ -128,6 +147,10 @@ class JSGraph : public ZoneObject {
   // Creates an empty StateValues node, used when we don't have any concrete
   // values for a certain part of the frame state.
   Node* EmptyStateValues();
+
+  // Typed state values with a single dead input. This is useful to represent
+  // dead accumulator.
+  Node* SingleDeadTypedStateValues();
 
   // Create a control node that serves as dependency for dead nodes.
   Node* Dead();
@@ -147,10 +170,17 @@ class JSGraph : public ZoneObject {
   enum CachedNode {
     kAllocateInNewSpaceStubConstant,
     kAllocateInOldSpaceStubConstant,
+    kArrayConstructorStubConstant,
     kToNumberBuiltinConstant,
-    kCEntryStubConstant,
+    kCEntryStub1Constant,
+    kCEntryStub2Constant,
+    kCEntryStub3Constant,
+    kCEntryStub1WithBuiltinExitFrameConstant,
     kEmptyFixedArrayConstant,
-    kEmptyLiteralsArrayConstant,
+    kEmptyStringConstant,
+    kFixedArrayMapConstant,
+    kFixedDoubleArrayMapConstant,
+    kPropertyArrayMapConstant,
     kHeapNumberMapConstant,
     kOptimizedOutConstant,
     kStaleRegisterConstant,
@@ -161,8 +191,10 @@ class JSGraph : public ZoneObject {
     kNullConstant,
     kZeroConstant,
     kOneConstant,
+    kMinusOneConstant,
     kNaNConstant,
     kEmptyStateValues,
+    kSingleDeadTypedStateValues,
     kDead,
     kNumCachedNodes  // Must remain last.
   };
@@ -185,4 +217,4 @@ class JSGraph : public ZoneObject {
 }  // namespace internal
 }  // namespace v8
 
-#endif
+#endif  // V8_COMPILER_JS_GRAPH_H_

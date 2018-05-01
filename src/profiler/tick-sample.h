@@ -16,7 +16,8 @@ class Isolate;
 
 struct TickSample : public v8::TickSample {
   void Init(Isolate* isolate, const v8::RegisterState& state,
-            RecordCEntryFrame record_c_entry_frame, bool update_stats);
+            RecordCEntryFrame record_c_entry_frame, bool update_stats,
+            bool use_simulator_reg_state = true);
   base::TimeTicks timestamp;
 };
 

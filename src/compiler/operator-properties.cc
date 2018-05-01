@@ -20,20 +20,23 @@ bool OperatorProperties::HasContextInput(const Operator* op) {
 
 
 // static
-int OperatorProperties::GetFrameStateInputCount(const Operator* op) {
+bool OperatorProperties::HasFrameStateInput(const Operator* op) {
   switch (op->opcode()) {
     case IrOpcode::kCheckpoint:
     case IrOpcode::kFrameState:
-      return 1;
+      return true;
     case IrOpcode::kJSCallRuntime: {
       const CallRuntimeParameters& p = CallRuntimeParametersOf(op);
-      return Linkage::NeedsFrameStateInput(p.id()) ? 1 : 0;
+      return Linkage::NeedsFrameStateInput(p.id());
     }
 
     // Strict equality cannot lazily deoptimize.
     case IrOpcode::kJSStrictEqual:
-    case IrOpcode::kJSStrictNotEqual:
-      return 0;
+      return false;
+
+    // Generator creation cannot call back into arbitrary JavaScript.
+    case IrOpcode::kJSCreateGeneratorObject:
+      return false;
 
     // Binary operations
     case IrOpcode::kJSAdd:
@@ -41,20 +44,38 @@ int OperatorProperties::GetFrameStateInputCount(const Operator* op) {
     case IrOpcode::kJSMultiply:
     case IrOpcode::kJSDivide:
     case IrOpcode::kJSModulus:
+    case IrOpcode::kJSExponentiate:
+
+    // Bitwise operations
+    case IrOpcode::kJSBitwiseOr:
+    case IrOpcode::kJSBitwiseXor:
+    case IrOpcode::kJSBitwiseAnd:
+
+    // Shift operations
+    case IrOpcode::kJSShiftLeft:
+    case IrOpcode::kJSShiftRight:
+    case IrOpcode::kJSShiftRightLogical:
 
     // Compare operations
     case IrOpcode::kJSEqual:
-    case IrOpcode::kJSNotEqual:
+    case IrOpcode::kJSGreaterThan:
+    case IrOpcode::kJSGreaterThanOrEqual:
+    case IrOpcode::kJSLessThan:
+    case IrOpcode::kJSLessThanOrEqual:
     case IrOpcode::kJSHasProperty:
+    case IrOpcode::kJSHasInPrototypeChain:
     case IrOpcode::kJSInstanceOf:
+    case IrOpcode::kJSOrdinaryHasInstance:
 
     // Object operations
     case IrOpcode::kJSCreate:
     case IrOpcode::kJSCreateArguments:
     case IrOpcode::kJSCreateArray:
+    case IrOpcode::kJSCreateTypedArray:
     case IrOpcode::kJSCreateLiteralArray:
     case IrOpcode::kJSCreateLiteralObject:
     case IrOpcode::kJSCreateLiteralRegExp:
+    case IrOpcode::kJSCreateObject:
 
     // Property access operations
     case IrOpcode::kJSLoadNamed:
@@ -63,52 +84,49 @@ int OperatorProperties::GetFrameStateInputCount(const Operator* op) {
     case IrOpcode::kJSStoreProperty:
     case IrOpcode::kJSLoadGlobal:
     case IrOpcode::kJSStoreGlobal:
+    case IrOpcode::kJSStoreNamedOwn:
+    case IrOpcode::kJSStoreDataPropertyInLiteral:
     case IrOpcode::kJSDeleteProperty:
-
-    // Context operations
-    case IrOpcode::kJSCreateScriptContext:
 
     // Conversions
     case IrOpcode::kJSToInteger:
     case IrOpcode::kJSToLength:
     case IrOpcode::kJSToName:
     case IrOpcode::kJSToNumber:
+    case IrOpcode::kJSToNumeric:
     case IrOpcode::kJSToObject:
     case IrOpcode::kJSToString:
+    case IrOpcode::kJSParseInt:
 
     // Call operations
-    case IrOpcode::kJSCallConstruct:
-    case IrOpcode::kJSCallFunction:
+    case IrOpcode::kJSConstructForwardVarargs:
+    case IrOpcode::kJSConstruct:
+    case IrOpcode::kJSConstructWithArrayLike:
+    case IrOpcode::kJSConstructWithSpread:
+    case IrOpcode::kJSCallForwardVarargs:
+    case IrOpcode::kJSCall:
+    case IrOpcode::kJSCallWithArrayLike:
+    case IrOpcode::kJSCallWithSpread:
 
     // Misc operations
-    case IrOpcode::kJSConvertReceiver:
+    case IrOpcode::kJSForInEnumerate:
     case IrOpcode::kJSForInNext:
-    case IrOpcode::kJSForInPrepare:
     case IrOpcode::kJSStackCheck:
-      return 1;
-
-    // Binary operators that can deopt in the middle the operation (e.g.,
-    // as a result of lazy deopt in ToNumber conversion) need a second frame
-    // state so that we can resume before the operation.
-    case IrOpcode::kJSBitwiseAnd:
-    case IrOpcode::kJSBitwiseOr:
-    case IrOpcode::kJSBitwiseXor:
-    case IrOpcode::kJSShiftLeft:
-    case IrOpcode::kJSShiftRight:
-    case IrOpcode::kJSShiftRightLogical:
-      return 2;
-
-    // Compare operators that can deopt in the middle the operation (e.g.,
-    // as a result of lazy deopt in ToNumber conversion) need a second frame
-    // state so that we can resume before the operation.
-    case IrOpcode::kJSGreaterThan:
-    case IrOpcode::kJSGreaterThanOrEqual:
-    case IrOpcode::kJSLessThan:
-    case IrOpcode::kJSLessThanOrEqual:
-      return 2;
+    case IrOpcode::kJSDebugger:
+    case IrOpcode::kJSGetSuperConstructor:
+    case IrOpcode::kJSBitwiseNot:
+    case IrOpcode::kJSDecrement:
+    case IrOpcode::kJSIncrement:
+    case IrOpcode::kJSNegate:
+    case IrOpcode::kJSPromiseResolve:
+    case IrOpcode::kJSRejectPromise:
+    case IrOpcode::kJSResolvePromise:
+    case IrOpcode::kJSPerformPromiseThen:
+    case IrOpcode::kJSObjectIsArray:
+      return true;
 
     default:
-      return 0;
+      return false;
   }
 }
 

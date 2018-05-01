@@ -27,28 +27,19 @@
 
 #include <utility>
 
-#include "src/v8.h"
-
 #include "src/global-handles.h"
+#include "src/heap/factory.h"
+#include "src/isolate.h"
+#include "src/objects-inl.h"
 #include "test/cctest/cctest.h"
 #include "test/cctest/heap/heap-utils.h"
 
-using namespace v8::internal;
+namespace v8 {
+namespace internal {
+namespace test_weakmaps {
 
 static Isolate* GetIsolateFrom(LocalContext* context) {
   return reinterpret_cast<Isolate*>((*context)->GetIsolate());
-}
-
-
-static Handle<JSWeakMap> AllocateJSWeakMap(Isolate* isolate) {
-  Handle<JSWeakMap> weakmap = isolate->factory()->NewJSWeakMap();
-  // Do not leak handles for the hash table, it would make entries strong.
-  {
-    HandleScope scope(isolate);
-    Handle<ObjectHashTable> table = ObjectHashTable::New(isolate, 1);
-    weakmap->set_table(*table);
-  }
-  return weakmap;
 }
 
 static int NumberOfWeakCalls = 0;
@@ -67,9 +58,8 @@ TEST(Weakness) {
   LocalContext context;
   Isolate* isolate = GetIsolateFrom(&context);
   Factory* factory = isolate->factory();
-  Heap* heap = isolate->heap();
   HandleScope scope(isolate);
-  Handle<JSWeakMap> weakmap = AllocateJSWeakMap(isolate);
+  Handle<JSWeakMap> weakmap = isolate->factory()->NewJSWeakMap();
   GlobalHandles* global_handles = isolate->global_handles();
 
   // Keep global reference to the key.
@@ -88,31 +78,28 @@ TEST(Weakness) {
     Handle<Map> map = factory->NewMap(JS_OBJECT_TYPE, JSObject::kHeaderSize);
     Handle<JSObject> object = factory->NewJSObjectFromMap(map);
     Handle<Smi> smi(Smi::FromInt(23), isolate);
-    int32_t hash = Object::GetOrCreateHash(isolate, key)->value();
+    int32_t hash = key->GetOrCreateHash(isolate)->value();
     JSWeakCollection::Set(weakmap, key, object, hash);
-    int32_t object_hash = Object::GetOrCreateHash(isolate, object)->value();
+    int32_t object_hash = object->GetOrCreateHash(isolate)->value();
     JSWeakCollection::Set(weakmap, object, smi, object_hash);
   }
   CHECK_EQ(2, ObjectHashTable::cast(weakmap->table())->NumberOfElements());
 
   // Force a full GC.
-  heap->CollectAllGarbage(false);
+  CcTest::CollectAllGarbage(Heap::kAbortIncrementalMarkingMask);
   CHECK_EQ(0, NumberOfWeakCalls);
   CHECK_EQ(2, ObjectHashTable::cast(weakmap->table())->NumberOfElements());
   CHECK_EQ(
       0, ObjectHashTable::cast(weakmap->table())->NumberOfDeletedElements());
 
   // Make the global reference to the key weak.
-  {
-    HandleScope scope(isolate);
-    std::pair<Handle<Object>*, int> handle_and_id(&key, 1234);
-    GlobalHandles::MakeWeak(
-        key.location(), reinterpret_cast<void*>(&handle_and_id),
-        &WeakPointerCallback, v8::WeakCallbackType::kParameter);
-  }
+  std::pair<Handle<Object>*, int> handle_and_id(&key, 1234);
+  GlobalHandles::MakeWeak(
+      key.location(), reinterpret_cast<void*>(&handle_and_id),
+      &WeakPointerCallback, v8::WeakCallbackType::kParameter);
   CHECK(global_handles->IsWeak(key.location()));
 
-  heap->CollectAllGarbage(false);
+  CcTest::CollectAllGarbage(Heap::kAbortIncrementalMarkingMask);
   CHECK_EQ(1, NumberOfWeakCalls);
   CHECK_EQ(0, ObjectHashTable::cast(weakmap->table())->NumberOfElements());
   CHECK_EQ(2,
@@ -124,9 +111,8 @@ TEST(Shrinking) {
   LocalContext context;
   Isolate* isolate = GetIsolateFrom(&context);
   Factory* factory = isolate->factory();
-  Heap* heap = isolate->heap();
   HandleScope scope(isolate);
-  Handle<JSWeakMap> weakmap = AllocateJSWeakMap(isolate);
+  Handle<JSWeakMap> weakmap = isolate->factory()->NewJSWeakMap();
 
   // Check initial capacity.
   CHECK_EQ(32, ObjectHashTable::cast(weakmap->table())->Capacity());
@@ -138,7 +124,7 @@ TEST(Shrinking) {
     for (int i = 0; i < 32; i++) {
       Handle<JSObject> object = factory->NewJSObjectFromMap(map);
       Handle<Smi> smi(Smi::FromInt(i), isolate);
-      int32_t object_hash = Object::GetOrCreateHash(isolate, object)->value();
+      int32_t object_hash = object->GetOrCreateHash(isolate)->value();
       JSWeakCollection::Set(weakmap, object, smi, object_hash);
     }
   }
@@ -150,7 +136,7 @@ TEST(Shrinking) {
   CHECK_EQ(32, ObjectHashTable::cast(weakmap->table())->NumberOfElements());
   CHECK_EQ(
       0, ObjectHashTable::cast(weakmap->table())->NumberOfDeletedElements());
-  heap->CollectAllGarbage(false);
+  CcTest::CollectAllGarbage(Heap::kAbortIncrementalMarkingMask);
   CHECK_EQ(0, ObjectHashTable::cast(weakmap->table())->NumberOfElements());
   CHECK_EQ(
       32, ObjectHashTable::cast(weakmap->table())->NumberOfDeletedElements());
@@ -170,10 +156,10 @@ TEST(Regress2060a) {
   Factory* factory = isolate->factory();
   Heap* heap = isolate->heap();
   HandleScope scope(isolate);
-  Handle<JSFunction> function = factory->NewFunction(
-      factory->function_string());
+  Handle<JSFunction> function =
+      factory->NewFunctionForTest(factory->function_string());
   Handle<JSObject> key = factory->NewJSObject(function);
-  Handle<JSWeakMap> weakmap = AllocateJSWeakMap(isolate);
+  Handle<JSWeakMap> weakmap = isolate->factory()->NewJSWeakMap();
 
   // Start second old-space page so that values land on evacuation candidate.
   Page* first_page = heap->old_space()->anchor()->next_page();
@@ -186,14 +172,14 @@ TEST(Regress2060a) {
       Handle<JSObject> object = factory->NewJSObject(function, TENURED);
       CHECK(!heap->InNewSpace(*object));
       CHECK(!first_page->Contains(object->address()));
-      int32_t hash = Object::GetOrCreateHash(isolate, key)->value();
+      int32_t hash = key->GetOrCreateHash(isolate)->value();
       JSWeakCollection::Set(weakmap, key, object, hash);
     }
   }
 
   // Force compacting garbage collection.
   CHECK(FLAG_always_compact);
-  heap->CollectAllGarbage();
+  CcTest::CollectAllGarbage();
 }
 
 
@@ -211,8 +197,8 @@ TEST(Regress2060b) {
   Factory* factory = isolate->factory();
   Heap* heap = isolate->heap();
   HandleScope scope(isolate);
-  Handle<JSFunction> function = factory->NewFunction(
-      factory->function_string());
+  Handle<JSFunction> function =
+      factory->NewFunctionForTest(factory->function_string());
 
   // Start second old-space page so that keys land on evacuation candidate.
   Page* first_page = heap->old_space()->anchor()->next_page();
@@ -225,34 +211,39 @@ TEST(Regress2060b) {
     CHECK(!heap->InNewSpace(*keys[i]));
     CHECK(!first_page->Contains(keys[i]->address()));
   }
-  Handle<JSWeakMap> weakmap = AllocateJSWeakMap(isolate);
+  Handle<JSWeakMap> weakmap = isolate->factory()->NewJSWeakMap();
   for (int i = 0; i < 32; i++) {
     Handle<Smi> smi(Smi::FromInt(i), isolate);
-    int32_t hash = Object::GetOrCreateHash(isolate, keys[i])->value();
+    int32_t hash = keys[i]->GetOrCreateHash(isolate)->value();
     JSWeakCollection::Set(weakmap, keys[i], smi, hash);
   }
 
   // Force compacting garbage collection. The subsequent collections are used
   // to verify that key references were actually updated.
   CHECK(FLAG_always_compact);
-  heap->CollectAllGarbage();
-  heap->CollectAllGarbage();
-  heap->CollectAllGarbage();
+  CcTest::CollectAllGarbage();
+  CcTest::CollectAllGarbage();
+  CcTest::CollectAllGarbage();
 }
 
 
 TEST(Regress399527) {
+  if (!FLAG_incremental_marking) return;
   CcTest::InitializeVM();
   v8::HandleScope scope(CcTest::isolate());
   Isolate* isolate = CcTest::i_isolate();
   Heap* heap = isolate->heap();
   {
     HandleScope scope(isolate);
-    AllocateJSWeakMap(isolate);
+    isolate->factory()->NewJSWeakMap();
     heap::SimulateIncrementalMarking(heap);
   }
   // The weak map is marked black here but leaving the handle scope will make
   // the object unreachable. Aborting incremental marking will clear all the
   // marking bits which makes the weak map garbage.
-  heap->CollectAllGarbage();
+  CcTest::CollectAllGarbage();
 }
+
+}  // namespace test_weakmaps
+}  // namespace internal
+}  // namespace v8
